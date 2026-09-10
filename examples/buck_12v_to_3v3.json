@@ -1,0 +1,65 @@
+{
+  "schema_version": "0.1",
+  "project": "buck_12v_to_3v3",
+  "module_type": "power.buck",
+  "topology": "async_buck",
+  "electrical": {
+    "vin": {"min": 10.8, "typ": 12.0, "max": 13.2},
+    "vout": {"min": 3.234, "typ": 3.3, "max": 3.366},
+    "iout_max": 2.0
+  },
+  "components": [
+    {"ref": "U1", "part": "MP1584EN", "role": "regulator"},
+    {"ref": "L1", "part": "IND-POW-10uH-3A", "role": "inductor", "value": "10uH", "rating": "3A"},
+    {"ref": "D1", "part": "SS34", "role": "diode", "rating": "3A/40V"},
+    {"ref": "C1", "part": "CAP-0805-10uF-25V-X5R", "role": "capacitor", "value": "10uF", "rating": "25V"},
+    {"ref": "C2", "part": "CAP-1206-22uF-25V-X5R", "role": "capacitor", "value": "22uF", "rating": "25V"},
+    {"ref": "C3", "part": "CAP-0402-0.1uF-25V", "role": "capacitor", "value": "0.1uF", "rating": "25V"},
+    {"ref": "C4", "part": "CAP-0402-0.1uF-25V", "role": "capacitor", "value": "0.1uF", "rating": "25V"},
+    {"ref": "C5", "part": "CAP-0402-0.1uF-25V", "role": "capacitor", "value": "0.1uF", "rating": "25V"},
+    {"ref": "C6", "part": "CAP-0402-10nF-25V", "role": "capacitor", "value": "10nF", "rating": "25V"},
+    {"ref": "R1", "part": "RES-0603-49.9k-1%", "role": "resistor", "value": "49.9k"},
+    {"ref": "R2", "part": "RES-0603-16k-1%", "role": "resistor", "value": "16k"},
+    {"ref": "R3", "part": "RES-0603-3.3k-1%", "role": "resistor", "value": "3.3k"},
+    {"ref": "J1", "part": "XH2.54-2P", "role": "connector"},
+    {"ref": "J2", "part": "XH2.54-2P", "role": "connector"}
+  ],
+  "nets": [
+    {"name": "VIN", "netclass": "power", "pins": [
+      {"ref": "J1", "pin": "1"}, {"ref": "C1", "pin": "1"}, {"ref": "C3", "pin": "1"},
+      {"ref": "U1", "pin": "VIN"}, {"ref": "U1", "pin": "EN"}]},
+    {"name": "VOUT", "netclass": "power", "pins": [
+      {"ref": "J2", "pin": "1"}, {"ref": "L1", "pin": "2"}, {"ref": "C2", "pin": "1"},
+      {"ref": "C4", "pin": "1"}, {"ref": "R1", "pin": "1"}]},
+    {"name": "SW", "netclass": "power", "pins": [
+      {"ref": "U1", "pin": "SW"}, {"ref": "L1", "pin": "1"}, {"ref": "D1", "pin": "K"}]},
+    {"name": "GND", "netclass": "power", "pins": [
+      {"ref": "J1", "pin": "2"}, {"ref": "J2", "pin": "2"}, {"ref": "C1", "pin": "2"},
+      {"ref": "C2", "pin": "2"}, {"ref": "C3", "pin": "2"}, {"ref": "C4", "pin": "2"},
+      {"ref": "C5", "pin": "2"}, {"ref": "C6", "pin": "2"}, {"ref": "R2", "pin": "2"},
+      {"ref": "R3", "pin": "2"}, {"ref": "D1", "pin": "A"}, {"ref": "U1", "pin": "GND"},
+      {"ref": "U1", "pin": "PGND"}, {"ref": "U1", "pin": "EP"}]},
+    {"name": "FB", "pins": [
+      {"ref": "U1", "pin": "FB"}, {"ref": "R1", "pin": "2"}, {"ref": "R2", "pin": "1"}]},
+    {"name": "BST", "pins": [
+      {"ref": "U1", "pin": "BST"}, {"ref": "C5", "pin": "1"}]},
+    {"name": "COMP", "pins": [
+      {"ref": "U1", "pin": "COMP"}, {"ref": "C6", "pin": "1"}, {"ref": "R3", "pin": "1"}]}
+  ],
+  "constraints": {
+    "efficiency_target": ">85%",
+    "ripple_target_mv": "<50",
+    "bom_cost_target_cny": "<10"
+  },
+  "design_rationale": "12V→3.3V 压差 8.7V，若用 LDO 热耗约 17W 不可接受，故选异步 buck。MP1584EN 集成开关管、4.5–28V 输入覆盖适配器电源、3A 裕量满足 2A 输出。开关频率取 ~500kHz，按 (Vout·(Vin−Vout))/(Vin·ΔI·f) 估算电感约 10µH。反馈分压 49.9k/16k 得 0.8×(1+3.119)≈3.30V。SS34 作为续流二极管（异步拓扑必需）。",
+  "assumptions": [
+    "负载电流 ≤ 2A，环境温度 ≤ 60°C",
+    "开关频率约 500kHz（由 R3/C6 补偿网络决定，需按 datasheet 复核）",
+    "输入为稳定直流（12V 适配器），无电池电压跌落场景"
+  ],
+  "risks": [
+    "电感感值与饱和电流需按实际开关频率与纹波要求复核",
+    "COMP 补偿网络取值必须按 datasheet 典型应用复核，或经 SPICE 验证",
+    "纹波指标需打样后实测确认"
+  ]
+}
