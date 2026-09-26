@@ -15,12 +15,20 @@
   `circuitos:PWR_<网络名>`（power_in + (power global)，模板抄官方 GND），
   靠 Value 自动全局合并——PWR_FLAG 做不到这一点（其引脚名是空串，
   只能靠导线接触合并，多引脚电源网络会被拆散成单引脚网，血的教训）；
-- 驱动标记：IR 引脚里没有 power_out 的网络（含 GND）在图纸顶部放一个
-  「PWR_FLAG 岛」——短导线 + PWR_FLAG + 该网络电源符号，告诉 ERC 该网络
-  有驱动。网络里已有 power_out 引脚（如 U1 的 SW）则不放，避免
-  power_out 对 power_out 冲突。
+- 驱动标记：需要供电、**来源已证明**但没有 power_out 引脚的网络（含 GND）
+  在图纸顶部放一个「PWR_FLAG 岛」——短导线 + PWR_FLAG + 该网络电源符号，
+  告诉 ERC 该网络有驱动。网络里已有 power_out 引脚（如 U1 的 SW）则不放，
+  避免 power_out 对 power_out 冲突。来源未证明的网络由校验层拦下，这里
+  **不会**替它补标志（补了只是让 ERC 闭嘴，不能证明它有电）。
 
-没接线的引脚放 no_connect。纯函数 render(ir) → str，同样输入必得同样输出。
+没接线的引脚放 no_connect——**只有** IR 的 components[].nc 显式声明过的引脚
+才会走到这一步；其余未接引脚在校验层就是错误。生成器不再"把所有遗漏变成
+NC"：那会把忘记连线的缺陷伪装成设计意图。
+
+引脚↔网络的解析全部来自 `checks/connectivity.py`（与校验器同一份），
+生成器不再自己遍历 nets[]——否则"校验通过、生成另一回事"迟早会发生。
+
+纯函数 render(ir, parts) → str，同样输入必得同样输出。
 """
 from __future__ import annotations
 
@@ -30,8 +38,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.kicad import symlib
+from checks.connectivity import Connectivity
+from ir.resolved import ResolvedIR, require_ok, resolve
 from ir.schema import PowerIR
-from parts.partsdb import PARTS, Part
+from parts.catalog import CatalogValidationPolicy
+from parts.partsdb import Part
 
 #: KiCad 10 官方格式戳（来自随安装附带的 demo 工程）。
 SCH_VERSION = "20250610"
@@ -116,11 +127,16 @@ def _half_width(names: list[str]) -> float:
     return max(5 * GRID, math.ceil(needed / 2 / GRID) * GRID)
 
 
+def _pin_triples(part: Part) -> tuple[tuple[str, str, str], ...]:
+    """目录引脚表 → 生成器内部用的 (编号, 名称, 电气类型) 三元组。"""
+    return tuple((p.number, p.name, p.kind) for p in part.pins)
+
+
 def _symbol_of(part: Part) -> _Sym:
     return _Sym(
         name=part.name, value=part.name, footprint=part.footprint or "",
-        pins=part.pins,
-        half_width=_half_width([n for _, n, _ in part.pins]),
+        pins=_pin_triples(part),
+        half_width=_half_width([p.name for p in part.pins]),
     )
 
 
@@ -164,8 +180,8 @@ def _pin_rows(part: Part) -> tuple[tuple[str, str, float, float, int], ...]:
                      for p in symlib.pins_of(part.lib_id))
     sym = _symbol_of(part)
     return tuple(
-        (num, name, *sym.xy(i), 0 if sym.xy(i)[0] < 0 else 180)
-        for i, (num, name, _) in enumerate(part.pins)
+        (p.number, p.name, *sym.xy(i), 0 if sym.xy(i)[0] < 0 else 180)
+        for i, p in enumerate(part.pins)
     )
 
 
@@ -188,6 +204,9 @@ class _Placed:
     x: float
     y: float
     rows: tuple[tuple[str, str, float, float, int], ...]
+    #: **有效封装**（IR 覆盖通过校验后生效，否则为目录默认）。
+    #: 空字符串 = 该料没有封装映射；此时网表里也不会有封装。
+    footprint: str = ""
 
     @property
     def v_reach(self) -> float:
@@ -240,11 +259,11 @@ def _notes_band(notes: tuple[tuple[str, str, str], ...]) -> float:
 
 
 def _plan(ir: PowerIR, items: list[_Placed],
-          parts: dict[str, Part]
+          parts: dict[str, Part], flagged: set[str]
           ) -> tuple[str, float, float, list[_Placed], float]:
     """挑一张装得下的图纸，算出每个元件的坐标；band 是图纸顶部说明区高度。"""
     notes = _notes(ir)
-    band = _notes_band(notes) + _island_offset(ir, parts)
+    band = _notes_band(notes) + _island_offset(ir, parts, flagged)
 
     room = _label_room(ir)
     h_reach = max(it.h_reach for it in items)
@@ -267,7 +286,7 @@ def _plan(ir: PowerIR, items: list[_Placed],
             placed.append(_Placed(it.ref, it.part,
                                   round(cx / GRID) * GRID,
                                   round((cursor + it.v_reach) / GRID) * GRID,
-                                  it.rows))
+                                  it.rows, footprint=it.footprint))
             cursor += 2 * it.v_reach + GRID
     return paper, width, height, placed, band
 
@@ -353,7 +372,7 @@ def _instance(place: _Placed, root: str, project: str, ir: PowerIR) -> list[str]
                          place.x, place.y - 2 * PITCH - GRID)
         out += _property("\t\t", "Value", value,
                          place.x, place.y + 2 * PITCH + GRID)
-    out += _property("\t\t", "Footprint", part.footprint or "",
+    out += _property("\t\t", "Footprint", place.footprint or "",
                      place.x, place.y, hide=True)
     out += _property("\t\t", "Datasheet", "", place.x, place.y, hide=True)
     for num, _, _, _, _ in place.rows:
@@ -463,16 +482,25 @@ def _power_lib_symbol(net: str) -> list[str]:
     return head + list(props) + body
 
 
-def _connections(place: _Placed, net_of: dict[tuple[str, str], str],
+def _connections(place: _Placed, conn: Connectivity, net_of: dict[tuple[str, str], str],
                  power_nets: set[str],
                  root: str, project: str,
                  pwr_counter: list[int]) -> list[str]:
-    """每个引脚：伸一段导线 + 标签/电源符号；没接线的放 no_connect。"""
+    """每个引脚：伸一段导线 + 标签/电源符号；**显式声明过**的悬空脚放 NC。
+
+    不在 net_of 里、又没被 components[].nc 声明的引脚会直接抛错：那是"忘了
+    连线"，把它画成 no_connect 等于把缺陷画成设计意图。
+    """
     out: list[str] = []
     for num, _, lx, ly, angle in place.rows:
         px, py = place.x + lx, place.y - ly
         net = net_of.get((place.ref, num))
         if net is None:
+            if not conn.is_nc(place.ref, num):
+                raise ValueError(
+                    f"{place.ref}.{num} 既没有接进网络，也没有在 "
+                    f"components[].nc 里显式声明不连接——"
+                    f"生成器不会替它补 no_connect")
             out += [f"\t(no_connect (at {_num(px)} {_num(py)})"
                     f" (uuid {_q(_uid('nc', place.ref, num))}))"]
             continue
@@ -513,69 +541,61 @@ def _connections(place: _Placed, net_of: dict[tuple[str, str], str],
 
 # ---- 对外接口 ---------------------------------------------------------------
 
-def _net_of_map(ir: PowerIR) -> dict[tuple[str, str], str]:
-    """(位号, 引脚编号) → 网络名。引脚引用按编号或名称解析。"""
-    m: dict[tuple[str, str], str] = {}
-    for net in ir.nets:
-        for pr in net.pins:
-            comp = ir.component_map.get(pr.ref)
-            if comp is None:
-                continue
-            part = PARTS.get(comp.part)
-            if part is None:
-                continue
-            num = _pin_number(part, pr.pin)
-            m[(pr.ref, num)] = net.name
-    return m
+def connections_of(ir: PowerIR,
+                   parts: dict[str, Part] | None = None) -> Connectivity:
+    """解析连接并在**有错时拒绝生成**。
 
-
-def _is_power_net_class(ir: PowerIR, name: str) -> bool:
-    for net in ir.nets:
-        if net.name == name:
-            return net.netclass == "power"
-    return False
-
-
-def _flagged_power_nets(ir: PowerIR, parts: dict[str, Part]) -> set[str]:
-    """需要 PWR_FLAG 岛标驱动的电源网络：IR 引脚里没有 power_out 的网络。
-
-    引脚电气类型以 partsdb 的 pins 元组 (编号, 名称, 类型) 为唯一事实来源
-    （官方符号部件与自绘方框部件都带类型）。
+    这是"生成结果与校验结论必须一致"的硬保证：生成器不拿一份带着冲突的
+    连接表去画图（那时它只能靠"后写的赢"或"跳过"来蒙混），也不接受
+    「校验说不行、生成照做」。预检范围 = `checks.preflight` 的全部内容
+    （连接冲突、供电无来源、器件子图违规、器件事实），不只是"能不能连上"。
     """
-    driven: set[str] = set()
-    pin_types: dict[str, dict[str, str]] = {}
-    for net in ir.nets:
-        for pr in net.pins:
-            comp = ir.component_map.get(pr.ref)
-            if comp is None or comp.part not in parts:
-                continue
-            part = parts[comp.part]
-            if part.name not in pin_types:
-                pin_types[part.name] = {num: kind
-                                        for num, _, kind in part.pins}
-            num = _pin_number(part, pr.pin)
-            if pin_types[part.name].get(num) == "power_out":
-                driven.add(net.name)
-    return {n.name for n in ir.nets
-            if n.netclass == "power" and n.name not in driven}
+    return require_ok(resolve(ir, parts)).connectivity
 
 
-def _island_offset(ir: PowerIR, parts: dict[str, Part]) -> float:
+def _flagged_power_nets(ir: PowerIR, parts: dict[str, Part],
+                        conn: Connectivity | None = None) -> set[str]:
+    """需要 PWR_FLAG 岛的网络：**来源已证明**且没有 power_out 引脚。
+
+    判定来自 `checks/supply.py`（与校验器同一份）：来源证明不了时那里已经
+    报错，这里不会再给它补一个标志把 ERC 糊过去。
+    """
+    return set(resolve(ir, parts).supply.flagged)
+
+
+def _island_offset(ir: PowerIR, parts: dict[str, Part],
+                   flagged: set[str] | None = None) -> float:
     """有 PWR_FLAG 岛时图纸顶部多占一行的高度。"""
-    flagged = _flagged_power_nets(ir, parts)
+    if flagged is None:
+        flagged = _flagged_power_nets(ir, parts)
     return PITCH + GRID if flagged else 0.0
 
 
-def render(ir: PowerIR, parts: dict[str, Part] | None = None) -> str:
-    """把 IR 渲染成 .kicad_sch 文本。纯函数，同样输入必得同样输出。"""
-    parts = PARTS if parts is None else parts
-    items = [_Placed(c.ref, parts[c.part], 0.0, 0.0, _pin_rows(parts[c.part]))
-             for c in ir.components]
-    paper, _, _, placed, band = _plan(ir, items, parts)
+def render(ir: PowerIR, parts: dict[str, Part] | None = None, *,
+           catalog_policy: CatalogValidationPolicy | None = None) -> str:
+    """把 IR 渲染成 .kicad_sch 文本。纯函数，同样输入必得同样输出。
+
+    解析只做一次：`resolve()` 给出连接、供电与**有效封装**，下面全部用它。
+    `catalog_policy` 一路传到目录自校验（见 CatalogValidationPolicy）。
+    """
+    rir = resolve(ir, parts, catalog_policy=catalog_policy)
+    return render_resolved(require_ok(rir))
+
+
+def render_resolved(rir: ResolvedIR) -> str:
+    """渲染一份**已解析**的 IR。生成路径都应当走这里，避免重复解析。"""
+    require_ok(rir)
+    ir = rir.ir
+    conn = rir.connectivity
+    net_of = dict(conn.pin_net)
+    items = [_Placed(c.ref, c.part, 0.0, 0.0, _pin_rows(c.part),
+                     footprint=c.footprint)
+             for c in rir.components]
+    parts = {c.part_name: c.part for c in rir.components}
+    paper, _, _, placed, band = _plan(ir, items, parts, set(rir.supply.flagged))
     root = _uid("sheet", ir.project)
-    net_of = _net_of_map(ir)
     power_nets = {n.name for n in ir.nets if n.netclass == "power"}
-    flagged = _flagged_power_nets(ir, parts)
+    flagged = set(rir.supply.flagged)
     pwr_counter = [0]
 
     out = ["(kicad_sch",
@@ -610,7 +630,7 @@ def render(ir: PowerIR, parts: dict[str, Part] | None = None) -> str:
         out += _power_lib_symbol(net)
     out.append("\t)")
 
-    y = MARGIN + PITCH + _island_offset(ir, parts)
+    y = MARGIN + PITCH + _island_offset(ir, parts, flagged)
     for tag, title, text in _notes(ir):
         out.append(f"\t(text {_q(title + '\\n' + text)}")
         out.append(f"\t\t(at {_num(MARGIN)} {_num(y)} 0)")
@@ -641,7 +661,7 @@ def render(ir: PowerIR, parts: dict[str, Part] | None = None) -> str:
             ref_dy=5 * GRID if net == "GND" else 4 * GRID)
 
     for place in placed:
-        out += _connections(place, net_of, power_nets,
+        out += _connections(place, conn, net_of, power_nets,
                             root, ir.project, pwr_counter)
     for place in placed:
         out += _instance(place, root, ir.project, ir)
@@ -656,13 +676,15 @@ def render(ir: PowerIR, parts: dict[str, Part] | None = None) -> str:
     return "\n".join(out) + "\n"
 
 
-def _symbol_lib_text(ir: PowerIR, parts: dict[str, Part]) -> str:
+def _symbol_lib_text(rir: ResolvedIR) -> str:
     """circuitos.kicad_sym 全文：自绘方框符号 + 生成的电源符号。
 
     与内嵌进 .kicad_sch 的定义同源。kicad-cli 只认内嵌副本，这个文件 +
     sym-lib-table 是给 KiCad 图形界面用的（也让 ERC 不再报「circuitos
     库不在配置中」，probe7 实测：有 .kicad_pro + 表 + 本文件即无警告）。
     """
+    ir = rir.ir
+    parts = {c.part_name: c.part for c in rir.components}
     embedded = sorted({c.part for c in ir.components
                        if parts[c.part].lib_id is None})
     pwr_nets = sorted(n.name for n in ir.nets
@@ -679,14 +701,31 @@ def _symbol_lib_text(ir: PowerIR, parts: dict[str, Part]) -> str:
     return "\n".join(out) + "\n"
 
 
-def write_schematic(ir: PowerIR, out_dir: Path) -> Path:
+def write_schematic(ir: PowerIR, out_dir: Path,
+                    parts: dict[str, Part] | None = None, *,
+                    catalog_policy: CatalogValidationPolicy | None = None) -> Path:
     """把原理图写到 <out_dir>/<project>.kicad_sch，返回路径。
 
     同时写配套的 circuitos.kicad_sym（自绘符号库，给 GUI 用）。
+
+    `parts` 必须一路传到底：T04 之前这里是 `render(ir)` + `PARTS` 两个
+    默认值，注入的目录到了落盘这一步就被悄悄换回全局表——图纸和网表用
+    的符号定义与校验时看的那份不是同一份。
+
+    `catalog_policy` 同理必须传到底：**目录自校验不过就不落盘**，
+    否则会留下一份"看起来生成成功"的产物（复核 P1#1）。
     """
+    rir = require_ok(resolve(ir, parts, catalog_policy=catalog_policy))
+    return write_resolved(rir, out_dir)
+
+
+def write_resolved(rir: ResolvedIR, out_dir: Path) -> Path:
+    """Write an already resolved snapshot without re-reading the catalog."""
+    require_ok(rir)
+    ir = rir.ir
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{ir.project}.kicad_sch"
-    path.write_text(render(ir), encoding="utf-8")
+    path.write_text(render_resolved(rir), encoding="utf-8")
     (out_dir / "circuitos.kicad_sym").write_text(
-        _symbol_lib_text(ir, PARTS), encoding="utf-8")
+        _symbol_lib_text(rir), encoding="utf-8")
     return path

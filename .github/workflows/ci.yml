@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run software test suite
+        run: python -m unittest discover -s tests -t .
+      - name: Verify tool-free generate profile
+        run: python gen.py examples/buck_12v_to_3v3.json --profile generate -o output/ci
+      - name: Check generated report contract
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          reports = list(Path("output/ci").glob("passed-*/build-report.json"))
+          assert len(reports) == 1, reports
+          report = json.loads(reports[0].read_text(encoding="utf-8"))
+          assert report["profile"] == "generate"
+          assert report["passed_profile"] is True
+          assert report["exit_code"] == 0
+          assert len(report["pending_targets"]) == 4
+          assert report["stages"]["erc"]["status"] == "skipped"
+          assert report["stages"]["netlist"]["status"] == "skipped"

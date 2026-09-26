@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.kicad_sym text eol=lf
+*.kicad_sch text eol=lf
+*.kicad_pro text eol=lf
+*.json text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary

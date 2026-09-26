@@ -1,0 +1,43 @@
+{
+  "_purpose": "MP1584EN 的独立预期值：手工按原厂数据手册录入，用于核对 parts/partsdb.py。『独立』的含义是——本文件禁止由 parts/partsdb.py 生成、禁止与它自动同步，否则校验器和生成器共用同一份未经独立校准的事实，错误引脚表在两侧一致时测试仍会通过（审查报告第 2 节指出的核心短板）。",
+  "_source": "MPS《MP1584 – 3A, 1.5MHz, 28V STEP-DOWN CONVERTER》Rev 1.0 (8/8/2011)；本地副本 output/review-evidence/MP1584.pdf，SHA-256 647BE29D30E0EEF770039B1DB2B9EAC2FFF8816EE54FAC0954D12EF8BB940736",
+  "_keys": "键名沿用 parts/partsdb.py 的词汇（便于机械比对），但**数值全部按上面的页码手工录入**，不从目录读取。",
+  "_pages": {
+    "pins": "第 2 页 TOP VIEW（脚号）+ 第 4 页 PIN FUNCTIONS（功能）",
+    "lifecycle": "MPS 产品页 https://www.monolithicpower.com/en/mp1584.html（2026-09-25 查询）：不建议新设计，替代型号 MP2338",
+    "abs_max": "第 2 页 ABSOLUTE MAXIMUM RATINGS",
+    "operating": "第 2 页 RECOMMENDED OPERATING CONDITIONS",
+    "electrical": "第 3 页 ELECTRICAL CHARACTERISTICS",
+    "footprint": "KiCad 10.0.6 官方库 Package_SO.pretty/SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm.kicad_mod（读出的电气焊盘）"
+  },
+  "part": "MP1584EN",
+  "mpn": "MP1584EN-LF-Z",
+  "manufacturer": "Monolithic Power Systems (MPS)",
+  "lifecycle": "nrfnd",
+  "package_pads": 9,
+  "pins": [
+    {"number": "1", "name": "SW"},
+    {"number": "2", "name": "EN"},
+    {"number": "3", "name": "COMP"},
+    {"number": "4", "name": "FB"},
+    {"number": "5", "name": "GND"},
+    {"number": "6", "name": "FREQ"},
+    {"number": "7", "name": "VIN"},
+    {"number": "8", "name": "BST"},
+    {"number": "9", "name": "EP"}
+  ],
+  "footprint": "Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm",
+  "footprint_electrical_pads": ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+  "footprint_heatsink_pad": "9",
+  "footprint_heatsink_size_mm": [2.41, 3.3],
+  "operating": {"vin_min": 4.5, "vin_max": 28.0, "vout_min": 0.8,
+                "vout_max": 25.0, "iout_max": 3.0},
+  "abs_max": {"vin": 30.0, "other_pins": 6.0, "bst_sw": 6.0,
+              "junction_temp_c": 150.0},
+  "electrical": {"vfb_min": 0.776, "vfb_typ": 0.8, "vfb_max": 0.824,
+                 "rds_on_ohm": 0.150, "current_limit_min": 4.0,
+                 "en_threshold_typ": 1.5, "theta_ja_c_per_w": 50.0},
+  "not_declared_by_datasheet": [
+    "SW 的绝对最大值是 VIN+0.3V（随工况变），不是常数——不得写成固定数值"
+  ]
+}

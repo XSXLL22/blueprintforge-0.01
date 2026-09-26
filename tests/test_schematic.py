@@ -15,8 +15,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.kicad import symlib
-from backend.kicad.cli import erc, export_netlist, find_cli
+from backend.kicad import erc as erc_mod
+from backend.kicad import sexpr, symlib
+from backend.kicad.cli import erc_report_path, export_netlist, find_cli
+from backend.kicad.netlist import normalize_net_name, parse_kicadxml
 from backend.kicad.project import write_project
 from backend.kicad.schematic import _pin_number, render, write_schematic
 from ir.schema import load
@@ -48,6 +50,12 @@ def parse_nets(text: str) -> dict[str, set[tuple[str, str]]]:
     node 元素可能内嵌 (pinfunction ...) 等子元素，扁平正则抓不住——
     先用括号深度切出整个 (nets ...) 块，再按 (net 边界逐段解析。
     实现经 output/probe3.py 对真实网表验证过。
+
+    **T05 起已不再用于对账**：生产对账走 `backend/kicad/netlist.py`
+    （kicadxml + 标准库 XML 解析）。保留本函数只因为它是 .net(sexpr)
+    格式的独立参考实现，供 `test_sexpr_parser_agrees_with_reference`
+    交叉验证 `backend/kicad/sexpr.py`。两套解析器各判各的正是 T05 要
+    消灭的缺陷，所以除此之外不得再有调用点。
     """
     start = text.index("(nets")
     depth = 0
@@ -68,6 +76,30 @@ def parse_nets(text: str) -> dict[str, set[tuple[str, str]]]:
         name = m.group(1).lstrip("/")
         nets[name] = {(r, p) for r, p in re.findall(
             r'\(node\s*\(ref "([^"]+)"\)\s*\(pin "([^"]+)"\)', m.group(2))}
+    return nets
+
+
+def parse_nets_sexpr(text: str) -> dict[str, set[tuple[str, str]]]:
+    """用生产的 `sexpr.py` 解析同一份 .net，返回与 `parse_nets` 同型的结果。
+
+    存在的意义就是与上面那个**独立参考实现**对比：两条完全不同的解析
+    路径得出同一结果，才说明 sexpr 解析器没错。
+    """
+    roots = sexpr.parse(text)
+    if len(roots) != 1:
+        raise AssertionError(f".net 顶层元素不止一个：{len(roots)}")
+    block = sexpr.child(roots[0], "nets")
+    if block is None:
+        raise AssertionError(".net 里没有 (nets ...) 段")
+    nets: dict[str, set[tuple[str, str]]] = {}
+    for net in sexpr.children(block, "net"):
+        names = sexpr.values_of(net, "name")
+        if not names:
+            raise AssertionError("(net ...) 没有 (name ...)")
+        name = str(names[0]).lstrip("/")
+        nets[name] = {(str(sexpr.values_of(n, "ref")[0]),
+                       str(sexpr.values_of(n, "pin")[0]))
+                      for n in sexpr.children(net, "node")}
     return nets
 
 
@@ -216,36 +248,73 @@ class TestKicadCli(unittest.TestCase):
         out = Path(cls._tmp.name)
         cls.sch = write_schematic(IR, out)
         write_project(cls.sch)
-        cls.errors, cls.warnings = erc(cls.sch)
-        cls.net = export_netlist(cls.sch, out / f"{IR.project}.net")
+        cls.report, cls.erc_diags = erc_mod.verify(cls.sch,
+                                                  erc_report_path(cls.sch))
+        cls.net = export_netlist(cls.sch, out / f"{IR.project}.xml")
+        cls.net_sexpr = export_netlist(cls.sch, out / f"{IR.project}.net",
+                                       fmt="kicadsexpr")
 
     @classmethod
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
     def test_erc_no_errors(self):
-        self.assertEqual(self.errors, [], msg="\n".join(self.errors))
+        self.assertIsNotNone(self.report, "没有拿到可用的 ERC 报告")
+        self.assertEqual(self.report.errors, (),
+                         "\n".join(v.render() for v in self.report.errors))
 
-    def test_erc_warnings_only_expected(self):
-        # 允许的警告：FB（分压网络无输出驱动，KiCad 不理解芯片内部环路）
-        allowed = ("Input pin not driven", "Input Power pin not driven")
-        for w in self.warnings:
-            self.assertTrue(any(a in w for a in allowed),
-                            f"意外的 ERC 警告: {w}")
+    def test_erc_no_unexempted_or_unregistered(self):
+        """按**规则 id** 判，不按英文子串判。
+
+        T06 之前这里用 `"Input pin not driven" in w` 之类的子串匹配放行告警——
+        那既依赖于工具消息的英文措辞（换个版本就失效），又把"没登记过的告警"
+        混在"已知的告警"里一起放过了。现在：豁免必须登记在
+        `backend/kicad/erc_allowlist.json`（规则 + 对象 + 理由 + 审查记录），
+        没登记的一律 W-ERC-002。
+        """
+        bad = [d for d in self.erc_diags
+               if d.code in ("E-ERC-002", "E-ERC-003", "E-ERC-004", "E-ERC-005",
+                             "W-ERC-002")]
+        self.assertEqual([(d.code, d.message) for d in bad], [],
+                         "ERC 有未豁免的错误或未登记的告警")
+
+    def test_erc_ignored_checks_are_visible(self):
+        """被禁用的检查项必须能读到——否则「0 错误」会掩盖「有检查没跑」。"""
+        self.assertIsNotNone(self.report)
+        self.assertEqual(self.report.ignored_keys,
+                         ("single_global_label", "four_way_junction",
+                          "simulation_model_issue", "footprint_filter"))
 
     def test_netlist_reconciliation(self):
-        """KiCad 解析出来的网络连接必须与 IR 逐网络逐引脚一致。"""
-        text = self.net.read_text(encoding="utf-8")
-        netlist = parse_nets(text)
-        self.assertTrue(netlist, "网表里没有解析出网络")
+        """KiCad 解析出来的网络连接必须与 IR 逐网络逐引脚一致。
+
+        用**生产**解析器（`backend/kicad/netlist.py`，kicadxml + 标准库
+        XML）。这里把每个网络期望的 (位号, 物理脚号) 集合**逐项写出来**，
+        比调用对账函数更强一点：对账函数和渲染器读的是同一份 `conn`，
+        两边一起错就会一起"通过"，而这里是照着 IR 重新算的。
+        """
+        netlist = parse_kicadxml(self.net.read_text(encoding="utf-8"),
+                                 source=str(self.net))
+        got = {normalize_net_name(n.name): {(nd.ref, nd.pin) for nd in n.nodes}
+               for n in netlist.nets}
+        self.assertTrue(got, "网表里没有解析出网络")
         for n in IR.nets:
             expected = set()
             for pr in n.pins:
                 part = PARTS[IR.component_map[pr.ref].part]
                 expected.add((pr.ref, _pin_number(part, pr.pin)))
-            self.assertEqual(netlist.get(n.name), expected,
+            self.assertEqual(got.get(n.name), expected,
                              f"网络 {n.name} 与 IR 不一致")
-        self.assertEqual(set(netlist), {n.name for n in IR.nets})
+        self.assertEqual(set(got), {n.name for n in IR.nets})
+
+    def test_sexpr_parser_agrees_with_reference(self):
+        """手写的 `sexpr.py` 与独立的括号计数参考实现必须读出同一张网表。
+
+        两个解析路径（词法递归下降 vs 正则+深度计数）在真实导出上给出
+        完全相同的结果，才算对 .net(kicadsexpr) 格式的解析没有跑偏。
+        """
+        text = self.net_sexpr.read_text(encoding="utf-8")
+        self.assertEqual(parse_nets_sexpr(text), parse_nets(text))
 
     def test_symbol_lib_and_table_written(self):
         """配套写 circuitos.kicad_sym + sym-lib-table（GUI 用，消库警告）。"""

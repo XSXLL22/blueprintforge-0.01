@@ -1,0 +1,82 @@
+{
+    "$schema": "https://schemas.kicad.org/erc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-09-26T12:17:45",
+    "ignored_checks": [
+        {
+            "description": "Global label only appears once in the schematic",
+            "key": "single_global_label"
+        },
+        {
+            "description": "Four connection points are joined together",
+            "key": "four_way_junction"
+        },
+        {
+            "description": "SPICE model issue",
+            "key": "simulation_model_issue"
+        },
+        {
+            "description": "Assigned footprint doesn't match footprint filters",
+            "key": "footprint_filter"
+        }
+    ],
+    "included_severities": [
+        "error",
+        "warning"
+    ],
+    "kicad_version": "10.0.6",
+    "sheets": [
+        {
+            "path": "/",
+            "uuid_path": "/eb39ff72-6851-543c-9f8f-86e466f8443a",
+            "violations": [
+                {
+                    "description": "Input Power pin not driven by any Output Power pins",
+                    "items": [
+                        {
+                            "description": "Symbol #PWR002 引脚 1 [Power input, Line]",
+                            "pos": {
+                                "x": 0.1524,
+                                "y": 0.1397
+                            },
+                            "uuid": "34329d26-2d3f-5c00-a8db-234bb41ee832"
+                        }
+                    ],
+                    "severity": "error",
+                    "type": "power_pin_not_driven"
+                },
+                {
+                    "description": "Pin not connected",
+                    "items": [
+                        {
+                            "description": "Symbol #PWR001 引脚 1 [Power output, Line]",
+                            "pos": {
+                                "x": 0.127,
+                                "y": 0.1397
+                            },
+                            "uuid": "7f085438-8280-564a-9040-fa2a3cde4f10"
+                        }
+                    ],
+                    "severity": "warning",
+                    "type": "pin_not_connected"
+                },
+                {
+                    "description": "Pin not connected",
+                    "items": [
+                        {
+                            "description": "Symbol #PWR002 引脚 1 [Power input, Line]",
+                            "pos": {
+                                "x": 0.1524,
+                                "y": 0.1397
+                            },
+                            "uuid": "34329d26-2d3f-5c00-a8db-234bb41ee832"
+                        }
+                    ],
+                    "severity": "warning",
+                    "type": "pin_not_connected"
+                }
+            ]
+        }
+    ],
+    "source": "buck_12v_to_3v3.kicad_sch"
+}

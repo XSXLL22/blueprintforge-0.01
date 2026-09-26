@@ -6,11 +6,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 
+from diagnostics import Diagnostic, Outcome
+from ir import names
+from ir.resolved import ResolvedIR, resolve
 from ir.schema import (MODULE_TYPES, ROLES, SCHEMA_VERSION, TOPOLOGIES,
-                       PowerIR)
-from parts.partsdb import PARTS, Part, resolve_pin
+                       PowerIR, is_finite)
+from parts.catalog import CatalogSnapshot, CatalogValidationPolicy
+from parts.partsdb import Part
+
+#: 兼容旧名：ValidateOutcome 就是通用的 Outcome。
+ValidateOutcome = Outcome
 
 #: role 与器件库 category 的对应关系。"passive" 是通配角色，不做类别检查。
 ROLE_CATEGORY = {
@@ -23,57 +29,58 @@ ROLE_CATEGORY = {
 }
 
 
-@dataclass(frozen=True)
-class Diagnostic:
-    """一条校验诊断。path 是出错字段路径，如 "components[2].part"。"""
-    code: str        # 稳定错误码，如 "E-IR-PARTS-003"
-    severity: str    # "error" | "warning"
-    path: str
-    message: str     # 人读得懂、LLM 修得了的一句说明
-
-
-@dataclass
-class ValidateOutcome:
-    """校验结论。ok 只当没有任何 error 时为真——继承 PcbResult.ok 哲学。"""
-    diagnostics: tuple[Diagnostic, ...] = ()
-
-    @property
-    def errors(self) -> tuple[Diagnostic, ...]:
-        return tuple(d for d in self.diagnostics if d.severity == "error")
-
-    @property
-    def warnings(self) -> tuple[Diagnostic, ...]:
-        return tuple(d for d in self.diagnostics if d.severity == "warning")
-
-    @property
-    def ok(self) -> bool:
-        return not self.errors
-
-
 def validate(ir: PowerIR,
-             parts: Mapping[str, Part] | None = None) -> ValidateOutcome:
-    """全量校验，返回所有诊断（错误+警告）。`parts` 可注入以便测试。"""
-    parts = PARTS if parts is None else parts
+             parts: Mapping[str, Part] | CatalogSnapshot | None = None,
+             *, catalog_policy: CatalogValidationPolicy | None = None
+             ) -> ValidateOutcome:
+    """全量校验，返回所有诊断（错误+警告）。`parts` 可注入以便测试。
+
+    目录自校验、连接、供电、子图与器件事实都取自 `resolve()` 那一份——
+    生成器拒绝生成的理由就是这里报出来的，不在这里另写一遍（复核 P1#1：
+    `CatalogSnapshot.validate()` 曾经只有"能调用"这一个身份）。
+
+    `catalog_policy` 决定封装焊盘核对到什么程度（generate 口径记未核对，
+    schematic 口径必须真核对）。校验器与生成器必须传同一个策略，否则
+    「校验说通过、生成按另一个口径拒绝」这种事又会以新形式出现。
+    """
+    return validate_resolved(resolve(ir, parts, catalog_policy=catalog_policy))
+
+
+def validate_resolved(rir: ResolvedIR) -> ValidateOutcome:
+    """Validate the same resolved snapshot that generation and reconciliation use."""
+    ir, catalog = rir.ir, rir.catalog
     diags: list[Diagnostic] = []
     _structure(ir, diags)
     _electrical(ir, diags)
-    _components(ir, parts, diags)
-    _nets(ir, parts, diags)
+    _targets(ir, diags)
+    _components(ir, catalog.parts, diags)
+    _nets(ir, catalog.parts, diags)
+
+    diags.extend(rir.diagnostics)
+
     _documentation(ir, diags)
-    return ValidateOutcome(tuple(diags))
+    return ValidateOutcome(tuple(diags),
+                           unverified=rir.unverified + rir.catalog_unverified)
 
 
 # ---- 结构 ----------------------------------------------------------------
 
 def _structure(ir: PowerIR, diags: list[Diagnostic]) -> None:
+    """语义层的防御性复核。
+
+    语法规则只有一份（`ir/names.py`）——decode 在入口已经拦过一遍，
+    这里复核是因为 `PowerIR` 也可以被直接构造（测试、工具、以后的其他
+    前端），不能假设所有 PowerIR 都经过了 decode。
+    """
     if ir.schema_version != SCHEMA_VERSION:
         diags.append(Diagnostic(
             "E-IR-STRUCT-001", "error", "schema_version",
             f"schema_version '{ir.schema_version}' 不受支持（当前 {SCHEMA_VERSION}）"))
-    if not ir.project or not ir.project.replace("_", "").isalnum():
+    reason = names.project_name_error(ir.project)
+    if reason is not None:
         diags.append(Diagnostic(
             "E-IR-STRUCT-002", "error", "project",
-            f"project '{ir.project}' 不是合法标识符（字母数字下划线）"))
+            f"project '{ir.project}' 不是合法标识符：{reason}"))
     if ir.module_type not in MODULE_TYPES:
         diags.append(Diagnostic(
             "E-IR-STRUCT-003", "error", "module_type",
@@ -91,20 +98,35 @@ def _structure(ir: PowerIR, diags: list[Diagnostic]) -> None:
 def _electrical(ir: PowerIR, diags: list[Diagnostic]) -> None:
     e = ir.electrical
     for name, r in (("vin", e.vin), ("vout", e.vout)):
+        # 有限性先查：NaN 参与的比较全为假，`0 < nan <= nan` 会"通过"
+        # 下面每一条范围规则——先拦下来，否则所有判断都失去意义。
+        if not all(is_finite(x) for x in (r.min, r.typ, r.max)):
+            diags.append(Diagnostic(
+                "E-IR-DECODE-004", "error", f"electrical.{name}",
+                f"electrical.{name} 含非有限数值（NaN/Infinity）——"
+                f"它会让所有比较为假，等价于「没有违规」，必须先修正输入",
+                actual=f"min={r.min} typ={r.typ} max={r.max}"))
+            continue
         if not (0 < r.min <= r.typ <= r.max):
             diags.append(Diagnostic(
                 "E-IR-ELECT-001", "error", f"electrical.{name}",
                 f"electrical.{name} 需满足 0 < min <= typ <= max"
                 f"（当前 min={r.min} typ={r.typ} max={r.max}）"))
-    if e.vout.max >= e.vin.min:
+    if not is_finite(e.iout_max):
+        diags.append(Diagnostic(
+            "E-IR-DECODE-004", "error", "electrical.iout_max",
+            f"iout_max 非有限（{e.iout_max}）——必须先修正输入",
+            actual=str(e.iout_max)))
+    elif e.iout_max <= 0:
+        diags.append(Diagnostic(
+            "E-IR-ELECT-003", "error", "electrical.iout_max",
+            f"iout_max 必须 > 0（当前 {e.iout_max}）"))
+    if (is_finite(e.vin.min) and is_finite(e.vout.max)
+            and e.vout.max >= e.vin.min):
         diags.append(Diagnostic(
             "E-IR-ELECT-002", "error", "electrical",
             f"降压模块要求 vout.max < vin.min"
             f"（当前 vout.max={e.vout.max}，vin.min={e.vin.min}）"))
-    if e.iout_max <= 0:
-        diags.append(Diagnostic(
-            "E-IR-ELECT-003", "error", "electrical.iout_max",
-            f"iout_max 必须 > 0（当前 {e.iout_max}）"))
     # LDO 压差热耗近似 = (vin.typ - vout.typ) * iout_max，>2W 警告
     if ir.module_type == "power.ldo":
         pd = (e.vin.typ - e.vout.typ) * e.iout_max
@@ -113,6 +135,30 @@ def _electrical(ir: PowerIR, diags: list[Diagnostic]) -> None:
                 "W-IR-ELECT-001", "warning", "electrical",
                 f"LDO 压差 {e.vin.typ - e.vout.typ:.2f}V × {e.iout_max}A ≈ "
                 f"{pd:.1f}W 热耗，请确认散热可行或改选 buck"))
+
+
+# ---- 设计目标 ------------------------------------------------------------
+
+def _targets(ir: PowerIR, diags: list[Diagnostic]) -> None:
+    """目标值的防御性复核。
+
+    结构层的严格解码已经查过一遍；这里再查是因为 `PowerIR` 可以被直接构造，
+    而「比值目标写着 85（其实想写 85%）」这类错误一旦溜进来，后面的
+    「是否满足目标」判断就会全部失真。
+    """
+    for t in ir.targets:
+        if not is_finite(t.value):
+            diags.append(Diagnostic(
+                "E-IR-DECODE-004", "error", f"targets.{t.key}",
+                f"目标 {t.key} 是非有限数值（{t.value}）——无法判定是否满足",
+                object_id=t.key, actual=str(t.value)))
+            continue
+        if t.dimension == "ratio" and t.value > 1.0:
+            diags.append(Diagnostic(
+                "E-IR-DECODE-011", "error", f"targets.{t.key}",
+                f"目标 {t.key} 是分数（0.02 = ±2%），{t.value} 超过 1.0——"
+                f"若想写百分比请改成 0.85",
+                object_id=t.key, actual=str(t.value), expected="≤ 1.0"))
 
 
 # ---- 器件与市场 ----------------------------------------------------------
@@ -161,19 +207,24 @@ def _components(ir: PowerIR, parts: Mapping[str, Part],
         diags.append(Diagnostic(
             "E-IR-PARTS-006", "error", "components",
             f"电源模块必须恰好 1 个 regulator（当前 {len(regs)} 个: {regs}）"))
-    if (ir.module_type == "power.buck"
-            and not any(c.role == "inductor" for c in ir.components)):
-        diags.append(Diagnostic(
-            "E-IR-PARTS-007", "error", "components",
-            "buck 拓扑必须包含电感（role=inductor）"))
+    # 拓扑必需器件（E-IR-PARTS-007）不在这一层判：那里要同时看 role、器件类别
+    # 和具体拓扑（异步 buck 还必须有续流二极管），唯一实现是
+    # `checks/parts.py::_topology`——校验器与生成器都从 `preflight` 取结论。
+    # 这里曾有一份"buck 必须有电感"的弱化副本，会造成同一问题两个来源。
 
 
 # ---- 网络 ----------------------------------------------------------------
 
 def _nets(ir: PowerIR, parts: Mapping[str, Part],
           diags: list[Diagnostic]) -> None:
-    names = [n.name for n in ir.nets]
-    dupes = sorted({n for n in names if names.count(n) > 1})
+    """网络**本身**的检查（重名/缺 GND/名字非法/空网）。
+
+    引脚层面的检查（不存在的位号/引脚、重复归属、必接脚、nc）在
+    `checks/connectivity.py`——那里是引脚↔网络索引的唯一来源，生成器也用
+    同一份，避免"校验一套、生成另一套"。
+    """
+    net_names = [n.name for n in ir.nets]
+    dupes = sorted({n for n in net_names if net_names.count(n) > 1})
     if dupes:
         diags.append(Diagnostic(
             "E-IR-NETS-001", "error", "nets", f"网络名重复: {dupes}"))
@@ -181,37 +232,17 @@ def _nets(ir: PowerIR, parts: Mapping[str, Part],
         diags.append(Diagnostic(
             "E-IR-NETS-002", "error", "nets", "缺少 GND 网络"))
 
-    cmap = ir.component_map
-    pinned: set[str] = set()
     for i, n in enumerate(ir.nets):
         base = f"nets[{i}]"
-        if not n.name or " " in n.name:
+        name_reason = names.net_name_error(n.name)
+        if name_reason is not None:
             diags.append(Diagnostic(
                 "E-IR-NETS-003", "error", f"{base}.name",
-                f"网络名 '{n.name}' 非法（非空且不含空格）"))
+                f"网络名 '{n.name}' 非法：{name_reason}"))
         if not n.pins:
             diags.append(Diagnostic(
                 "W-IR-NETS-001", "warning", f"{base}.pins",
                 f"网络 '{n.name}' 没有引脚"))
-        for p in n.pins:
-            comp = cmap.get(p.ref)
-            if comp is None:
-                diags.append(Diagnostic(
-                    "E-IR-NETS-004", "error", f"{base}.pins",
-                    f"网络 '{n.name}' 引用了不存在的位号 '{p.ref}'"))
-                continue
-            part = parts.get(comp.part)
-            if part is not None and resolve_pin(part, p.pin) is None:
-                diags.append(Diagnostic(
-                    "E-IR-PARTS-009", "error", f"{base}.pins",
-                    f"网络 '{n.name}' 引用了位号 {p.ref} 不存在的引脚 "
-                    f"'{p.pin}'（该器件引脚: {[r[0] for r in part.pins]}）"))
-            pinned.add(p.ref)
-    orphans = [c.ref for c in ir.components if c.ref not in pinned]
-    if orphans:
-        diags.append(Diagnostic(
-            "W-IR-NETS-002", "warning", "nets",
-            f"这些器件没接进任何网络（悬空）: {orphans}"))
 
 
 # ---- 文档完整性 ----------------------------------------------------------
@@ -229,3 +260,11 @@ def _documentation(ir: PowerIR, diags: list[Diagnostic]) -> None:
         diags.append(Diagnostic(
             "W-IR-DOC-003", "warning", "risks",
             "risks 为空——应标记哪些参数必须实测/复核"))
+    # §4.1：未定义条件时不能给对应指标盖通过章。这里只提醒"缺条件"，
+    # 「实测 vs 仿真 vs 未验证」的结论由 BuildReport（T07）给出。
+    unverifiable = [t.key for t in ir.targets if not t.conditions]
+    if unverifiable:
+        diags.append(Diagnostic(
+            "W-IR-DOC-004", "warning", "targets",
+            f"这些目标没有定义验证条件（工况/带宽/温度/数量口径），"
+            f"不满足条件就无法判定通过与否: {unverifiable}"))

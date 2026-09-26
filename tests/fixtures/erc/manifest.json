@@ -1,0 +1,41 @@
+{
+  "_comment": "真实 ERC 报告的出处与指纹。测试核对 sha256 与下列字段是否与文件内容一致——fixture 不能被悄悄改掉。",
+  "produced_by": "output/t06-evidence/_learn/h1_probe.py（kicad-cli 10.0.6）",
+  "fixtures": [
+    {
+      "file": "real-clean.json",
+      "sha256": "09dfe4a318fca301e6672aa99974854d96588bc03fdc07a7376a89a9a9d669a7",
+      "how": "完整工程副本原样跑 ERC",
+      "kicad_version": "10.0.6",
+      "source": "buck_12v_to_3v3.kicad_sch",
+      "included_severities": ["error", "warning"],
+      "ignored_checks": ["single_global_label", "four_way_junction",
+                         "simulation_model_issue", "footprint_filter"],
+      "violations": 0
+    },
+    {
+      "file": "real-warning-and-error.json",
+      "sha256": "ebbe049cde126d5c7939e54e1fcf982b8befc2afcbe512d40decf884743430f6",
+      "how": "erc.rule_severities.pin_not_connected=warning + 删一条 (wire ...)",
+      "kicad_version": "10.0.6",
+      "source": "buck_12v_to_3v3.kicad_sch",
+      "included_severities": ["error", "warning"],
+      "ignored_checks": ["single_global_label", "four_way_junction",
+                         "simulation_model_issue", "footprint_filter"],
+      "violations": 3,
+      "severity_counts": {"error": 1, "warning": 2}
+    },
+    {
+      "file": "real-ignored-important.json",
+      "sha256": "212f0bcb2592a74b530ebb84c158ae085d5c64d6044a4c8cf63fa8c0fd734e57",
+      "how": "erc.rule_severities.pin_not_connected=ignore，图完整",
+      "kicad_version": "10.0.6",
+      "source": "buck_12v_to_3v3.kicad_sch",
+      "included_severities": ["error", "warning"],
+      "ignored_checks": ["pin_not_connected", "single_global_label",
+                         "four_way_junction", "simulation_model_issue",
+                         "footprint_filter"],
+      "violations": 0
+    }
+  ]
+}

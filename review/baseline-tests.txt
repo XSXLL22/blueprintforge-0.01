@@ -1,0 +1,48 @@
+test_missing_rationale_is_warning_only (test_ir.TestDocumentation.test_missing_rationale_is_warning_only) ... ok
+test_ldo_heat_warning (test_ir.TestElectrical.test_ldo_heat_warning) ... ok
+test_range_order (test_ir.TestElectrical.test_range_order) ... ok
+test_vin_not_above_vout (test_ir.TestElectrical.test_vin_not_above_vout) ... ok
+test_example_is_clean (test_ir.TestExample.test_example_is_clean) ... ok
+test_example_roundtrip (test_ir.TestExample.test_example_roundtrip)
+to_dict(from_dict(x)) 应能通过同样的校验。 ... ok
+test_dangling_pin (test_ir.TestNets.test_dangling_pin) ... ok
+test_missing_gnd (test_ir.TestNets.test_missing_gnd) ... ok
+test_buck_without_inductor (test_ir.TestParts.test_buck_without_inductor) ... ok
+test_duplicate_ref (test_ir.TestParts.test_duplicate_ref) ... ok
+test_eol_part_is_hard_error (test_ir.TestParts.test_eol_part_is_hard_error) ... ok
+test_role_category_mismatch (test_ir.TestParts.test_role_category_mismatch) ... ok
+test_unknown_part_is_error (test_ir.TestParts.test_unknown_part_is_error) ... ok
+test_topology_mismatch (test_ir.TestStructure.test_topology_mismatch) ... ok
+test_wrong_schema_version (test_ir.TestStructure.test_wrong_schema_version) ... ok
+test_example_parts_all_exist (test_partsdb.TestPartsDb.test_example_parts_all_exist) ... ok
+test_fields_legal (test_partsdb.TestPartsDb.test_fields_legal) ... ok
+test_erc_no_errors (test_schematic.TestKicadCli.test_erc_no_errors) ... skipped '需要 kicad-cli（装 KiCad 或设 COS_KICAD_CLI）'
+test_erc_warnings_only_expected (test_schematic.TestKicadCli.test_erc_warnings_only_expected) ... skipped '需要 kicad-cli（装 KiCad 或设 COS_KICAD_CLI）'
+test_netlist_reconciliation (test_schematic.TestKicadCli.test_netlist_reconciliation)
+KiCad 解析出来的网络连接必须与 IR 逐网络逐引脚一致。 ... skipped '需要 kicad-cli（装 KiCad 或设 COS_KICAD_CLI）'
+test_symbol_lib_and_table_written (test_schematic.TestKicadCli.test_symbol_lib_and_table_written)
+配套写 circuitos.kicad_sym + sym-lib-table（GUI 用，消库警告）。 ... skipped '需要 kicad-cli（装 KiCad 或设 COS_KICAD_CLI）'
+test_balanced_parens (test_schematic.TestStructure.test_balanced_parens) ... ok
+test_deterministic (test_schematic.TestStructure.test_deterministic) ... ok
+test_example_ir_validates_clean (test_schematic.TestStructure.test_example_ir_validates_clean) ... ok
+test_generated_power_symbols_embedded (test_schematic.TestStructure.test_generated_power_symbols_embedded)
+每个非 GND 电源网络都有一个内嵌的 (power global) 符号定义。 ... ok
+test_grid_alignment (test_schematic.TestStructure.test_grid_alignment)
+我们放置的东西（导线/标签/实例/文字）都要落在 1.27 网格上。 ... ok
+test_official_symbols_embedded (test_schematic.TestStructure.test_official_symbols_embedded)
+官方符号定义必须内嵌进 lib_symbols（kicad-cli 只认内嵌）。 ... ok
+test_refs_unique_and_present (test_schematic.TestStructure.test_refs_unique_and_present) ... ok
+test_signal_nets_have_labels (test_schematic.TestStructure.test_signal_nets_have_labels) ... ok
+test_symbol_geometry_matches_pin_rows (test_schematic.TestStructure.test_symbol_geometry_matches_pin_rows)
+每个实例的 (pin "N" ...) 集合 == _pin_rows 给出的编号集合。 ... ok
+test_uuid_unique (test_schematic.TestStructure.test_uuid_unique) ... ok
+test_vendored_pin_geometry (test_schematic.TestStructure.test_vendored_pin_geometry)
+vendor 库解析出的引脚几何与官方定义一致（防漂移）。 ... ok
+test_version_and_generator_stamp (test_schematic.TestStructure.test_version_and_generator_stamp) ... ok
+test_wire_label_power_counts (test_schematic.TestStructure.test_wire_label_power_counts)
+导线=引脚连接+驱动岛；标签=信号引脚；电源符号各归其位。 ... ok
+
+----------------------------------------------------------------------
+Ran 34 tests in 0.591s
+
+OK (skipped=4)

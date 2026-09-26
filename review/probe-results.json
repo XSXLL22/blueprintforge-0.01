@@ -1,0 +1,117 @@
+[
+  {
+    "probe": "duplicate_pin_across_nets",
+    "expected": "reject physical pin assigned to VIN and GND",
+    "observed": {
+      "ok": true,
+      "codes": [],
+      "rendered_U1_pin6_net": "GND"
+    }
+  },
+  {
+    "probe": "missing_required_vin",
+    "expected": "reject missing VIN connection",
+    "observed": {
+      "ok": true,
+      "codes": [],
+      "generated_no_connect_count": 1
+    }
+  },
+  {
+    "probe": "ignored_footprint_override",
+    "expected": "emit the explicitly requested footprint or reject it",
+    "observed": {
+      "ok": true,
+      "codes": [],
+      "override_present": false
+    }
+  },
+  {
+    "probe": "injected_parts_disconnected",
+    "expected": "use supplied catalog for both symbols and connections",
+    "observed": {
+      "ok": true,
+      "generated_no_connect_count": 9
+    }
+  },
+  {
+    "probe": "nonfinite_current_NaN",
+    "expected": "reject non-finite current",
+    "observed": {
+      "ok": true,
+      "codes": []
+    }
+  },
+  {
+    "probe": "nonfinite_current_Infinity",
+    "expected": "reject non-finite current",
+    "observed": {
+      "ok": true,
+      "codes": []
+    }
+  },
+  {
+    "probe": "component_ratings_ignored",
+    "expected": "reject demand outside regulator/capacitor ratings",
+    "observed": {
+      "ok": true,
+      "codes": []
+    }
+  },
+  {
+    "probe": "regulator_topology_mismatch",
+    "expected": "reject async MP1584 used as sync_buck",
+    "observed": {
+      "ok": true,
+      "codes": []
+    }
+  },
+  {
+    "probe": "async_buck_without_diode",
+    "expected": "reject missing required freewheel diode",
+    "observed": {
+      "ok": true,
+      "codes": []
+    }
+  },
+  {
+    "probe": "constraints_not_validated",
+    "expected": "reject malformed supported constraint",
+    "observed": {
+      "ok": true,
+      "codes": []
+    }
+  },
+  {
+    "probe": "malformed_project_type",
+    "expected": "structured input diagnostic",
+    "observed": "AttributeError: 'int' object has no attribute 'replace'"
+  },
+  {
+    "probe": "erc_error_without_items",
+    "expected": "retain error or reject incomplete report",
+    "observed": {
+      "errors": [],
+      "warnings": [],
+      "mocked": true
+    }
+  },
+  {
+    "probe": "erc_missing_violations",
+    "expected": "retain error or reject incomplete report",
+    "observed": {
+      "errors": [],
+      "warnings": [],
+      "mocked": true
+    }
+  },
+  {
+    "probe": "cli_no_netlist_reconciliation",
+    "expected": "reject exported netlist missing all IR nets",
+    "observed": {
+      "exit_code": 0,
+      "reports_all_passed": true,
+      "mocked": true
+    }
+  }
+]

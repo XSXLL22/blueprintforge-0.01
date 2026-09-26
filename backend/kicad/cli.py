@@ -5,13 +5,15 @@ import。这里把两件事收成小接口：
 
 - `find_cli()`：按「环境变量 → PATH → 常见安装目录」的顺序找。
 - `run()`：统一 UTF-8 解码与超时，返回 CompletedProcess。
-- `erc()` / `export_netlist()`：原理图验证的专用封装。
+- `export_netlist()`：网表导出的专用封装。
+
+ERC 的调用与解析在 `backend/kicad/erc.py`（T06 起是唯一入口；`cli.erc()`
+已删除，避免两套解析各判各的）。
 
 用环境变量 `COS_KICAD_CLI` 可以指定任意路径，便于 CI。
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -91,49 +93,24 @@ def run(args: Sequence[str | Path], *, cwd: Path | None = None,
     return proc
 
 
-def erc(sch: Path) -> tuple[list[str], list[str]]:
-    """跑原理图 ERC，返回 (错误列表, 警告列表)。
+def erc_report_path(sch: Path) -> Path:
+    """`<原理图>.erc.json`：与 `.kicad_sch` 同名同目录。
 
-    用 --format json 拿结构化报告。**报告结构不符预期时抛 KicadError**——
-    宁可失败也不静默返回「0 错误」的假通过（血的教训：官方符号没解析
-    出来时 ERC 全是违规，旧版解析器却报告 0 错误 0 警告）。
+    调用方（T07 的 pipeline）可以传自己的路径；这个函数只是默认约定。
     """
-    proc = run(["sch", "erc", "--format", "json", "--output",
-                str(sch.with_suffix(".erc.json")), str(sch)])
-    report = sch.with_suffix(".erc.json")
-    if proc.returncode != 0 or not report.exists():
-        text = proc.stdout + "\n" + proc.stderr
-        if text.strip():
-            raise KicadError(f"ERC 执行失败（退出码 {proc.returncode}）：\n{text}")
-        raise KicadError(f"ERC 执行失败且没有输出报告（退出码 {proc.returncode}）")
-
-    data = json.loads(report.read_text(encoding="utf-8"))
-    errors: list[str] = []
-    warnings: list[str] = []
-    sheets = data.get("sheets")
-    if isinstance(sheets, list):
-        for sheet in sheets:
-            for v in sheet.get("violations", []):
-                sev = v.get("severity", "")
-                desc = v.get("description", "?")
-                items = v.get("items", [])
-                for it in items:
-                    where = it.get("description", "")
-                    line = f"{desc}: {where}" if where else desc
-                    if sev == "error":
-                        errors.append(line)
-                    elif sev == "warning":
-                        warnings.append(line)
-                    else:
-                        raise KicadError(
-                            f"ERC 报告出现未知严重级别 '{sev}'（{line}）")
-        return errors, warnings
-    raise KicadError(
-        f"ERC 报告结构未知（顶层键: {list(data.keys())}），"
-        f"请升级 backend/kicad/cli.py 的解析器——拒绝假通过。")
+    return sch.with_suffix(".erc.json")
 
 
-def export_netlist(sch: Path, out: Path) -> Path:
-    """导出网表到 `out`（KiCad 传统 .net 格式），返回路径。"""
-    run(["sch", "export", "netlist", "--output", str(out), str(sch)], check=True)
+def export_netlist(sch: Path, out: Path, *,
+                   fmt: str = "kicadxml") -> Path:
+    """导出网表到 `out`，返回路径。
+
+    默认 `kicadxml`：标准 XML，用标准库就能可靠解析（引号、转义、嵌套都不是
+    正则能处理的），对账模块 `backend/kicad/netlist.py` 依赖它。可用的格式
+    以 `kicad-cli sch export netlist --help` 为准（10.0.6 实测支持
+    kicadsexpr / kicadxml / cadstar / orcadpcb2 / spice / spicemodel /
+    pads / allegro）。
+    """
+    run(["sch", "export", "netlist", "--format", fmt,
+         "--output", str(out), str(sch)], check=True)
     return out
